@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Satellite Mesh Network — Live View</title>
+<style>
+  body { background: #0a0e17; color: #cfd8e3; font-family: monospace; margin: 0; padding: 20px; }
+  h1 { font-size: 16px; font-weight: normal; color: #8fb8ff; }
+  #canvas-wrap { position: relative; }
+  canvas { background: #0a0e17; border: 1px solid #1e2a3a; }
+  #controls { margin-top: 12px; display: flex; gap: 12px; align-items: center; }
+  button { background: #16233a; color: #cfd8e3; border: 1px solid #2a3d5c; padding: 6px 14px;
+           font-family: monospace; cursor: pointer; }
+  button:hover { background: #1e3050; }
+  #time-label { color: #6b8cae; }
+  #legend { margin-top: 10px; font-size: 12px; color: #6b8cae; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<h1>DELAY-TOLERANT SATELLITE MESH — packet routing demo</h1>
+<div id="canvas-wrap">
+  <canvas id="canvas" width="900" height="700"></canvas>
+</div>
+<div id="controls">
+  <button id="playBtn">Play</button>
+  <button id="resetBtn">Reset</button>
+  <span id="time-label">t = 0 min</span>
+</div>
+<div id="legend">
+  <span class="dot" style="background:#3a5a8a"></span>satellite &nbsp;
+  <span class="dot" style="background:#e0a030"></span>ground station &nbsp;
+  <span class="dot" style="background:#4ade80"></span>active link &nbsp;
+  <span class="dot" style="background:#ff5577"></span>packet (following its real routed path)
+</div>
+
+<script>
+let data = null;
+let playing = false;
+let currentFrameIdx = 0;
+let animHandle = null;
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+function worldToScreen(x, y, scale) {
+  return [W/2 + x * scale, H/2 + y * scale];
+}
+
+function draw(frameIdx) {
+  const frame = data.position_frames[frameIdx];
+  const t = frame.t;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Earth
+  const earthScale = (Math.min(W, H) * 0.35) / data.meta.earth_radius_km;
+  ctx.beginPath();
+  ctx.arc(W/2, H/2, data.meta.earth_radius_km * earthScale, 0, Math.PI * 2);
+  ctx.fillStyle = '#132030';
+  ctx.fill();
+  ctx.strokeStyle = '#25405a';
+  ctx.stroke();
+
+  // Active links (drawn first, under the nodes)
+  ctx.strokeStyle = 'rgba(74, 222, 128, 0.35)';
+  ctx.lineWidth = 1;
+  for (const w of data.contact_windows) {
+    if (w.start <= t && t <= w.end) {
+      const pa = frame.positions[w.a];
+      const pb = frame.positions[w.b];
+      if (!pa || !pb) continue;
+      const [ax, ay] = worldToScreen(pa[0], pa[1], earthScale);
+      const [bx, by] = worldToScreen(pb[0], pb[1], earthScale);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+    }
+  }
+
+  // Satellites + ground stations
+  for (const satId of data.satellites) {
+    const p = frame.positions[satId];
+    if (!p) continue;
+    const [x, y] = worldToScreen(p[0], p[1], earthScale);
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#3a5a8a';
+    ctx.fill();
+  }
+  for (const gsId of data.ground_stations) {
+    const p = frame.positions[gsId];
+    if (!p) continue;
+    const [x, y] = worldToScreen(p[0], p[1], earthScale);
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#e0a030';
+    ctx.fill();
+  }
+
+  // The demo packet: interpolate its position along its REAL routed path
+  const path = data.demo_packet.path;
+  if (path && path.length > 1) {
+    let packetPos = null;
+    for (let i = 0; i < path.length - 1; i++) {
+      const hopStart = path[i].arrival_s;
+      const hopEnd = path[i+1].arrival_s;
+      if (t >= hopStart && t <= hopEnd) {
+        const frac = hopEnd > hopStart ? (t - hopStart) / (hopEnd - hopStart) : 0;
+        const pA = frame.positions[path[i].node];
+        const pB = frame.positions[path[i+1].node];
+        if (pA && pB) {
+          packetPos = [pA[0] + (pB[0]-pA[0])*frac, pA[1] + (pB[1]-pA[1])*frac];
+        }
+      }
+    }
+    // Before the route starts or after it ends, snap to source/dest
+    if (t < path[0].arrival_s) packetPos = frame.positions[path[0].node];
+    if (t > path[path.length-1].arrival_s) packetPos = frame.positions[path[path.length-1].node];
+
+    if (packetPos) {
+      const [x, y] = worldToScreen(packetPos[0], packetPos[1], earthScale);
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff5577';
+      ctx.shadowColor = '#ff5577';
+      ctx.shadowBlur = 12;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  document.getElementById('time-label').textContent =
+    `t = ${(t/60).toFixed(1)} min  |  route: ${path ? path.map(h=>h.node).join(' -> ') : 'unreachable'}`;
+}
+
+function tick() {
+  if (!playing) return;
+  currentFrameIdx = (currentFrameIdx + 1) % data.position_frames.length;
+  draw(currentFrameIdx);
+  animHandle = setTimeout(tick, 60);
+}
+
+document.getElementById('playBtn').onclick = () => {
+  playing = !playing;
+  document.getElementById('playBtn').textContent = playing ? 'Pause' : 'Play';
+  if (playing) tick();
+};
+document.getElementById('resetBtn').onclick = () => {
+  currentFrameIdx = 0;
+  draw(0);
+};
+
+fetch('viz_data.json').then(r => r.json()).then(d => {
+  data = d;
+  draw(0);
+});
+</script>
+</body>
+</html>

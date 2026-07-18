@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package mesh;
+
+// A single unit of data moving through the mesh.
+message Bundle {
+    string bundle_id = 1;
+    string source_id = 2;
+    string dest_id = 3;
+    string priority = 4;       // "command" | "telemetry" | "imagery"
+    int32 size_kb = 5;
+    double created_at_s = 6;   // simulated time of creation
+    double ttl_s = 7;          // time-to-live in simulated seconds
+    int32 hop_count = 8;
+    repeated string path_so_far = 9;  // node IDs visited, for demo/visualization
+}
+
+message PushRequest {
+    Bundle bundle = 1;
+    string from_node = 2;
+}
+
+message PushAck {
+    bool accepted = 1;
+    string reason = 2;
+}
+
+message HeartbeatRequest {
+    string node_id = 1;
+    double sim_time_s = 2;
+}
+
+message HeartbeatResponse {
+    string node_id = 1;
+    bool alive = 2;
+}
+
+service MeshNode {
+    // Deliver a bundle to this node during an active contact window.
+    rpc PushBundle (PushRequest) returns (PushAck);
+
+    // Liveness / chaos-testing check.
+    rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+}
